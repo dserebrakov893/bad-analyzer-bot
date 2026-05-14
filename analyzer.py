@@ -1,0 +1,118 @@
+import base64
+import imghdr
+import json
+import logging
+import re
+import anthropic
+from config import ANTHROPIC_API_KEY
+
+logger = logging.getLogger(__name__)
+
+_client = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
+
+SYSTEM_PROMPT = """Ты — эксперт-нутрициолог с медицинским образованием, специализирующийся на биологически активных добавках (БАД). Анализируешь состав БАД строго на основе доказательной медицины.
+
+При анализе БАД ты:
+
+1. Извлекаешь каждый ингредиент из состава
+2. Присваиваешь уровень доказательности по шкале:
+   - A: доказательства из множества рандомизированных клинических исследований, метаанализов
+   - B: доказательства из отдельных качественных RCT или когортных исследований
+   - C: доказательства из обсервационных исследований, мнения экспертов, ограниченные данные
+   - D: доказательства отсутствуют, псевдонаучные заявления, маркетинг
+3. Оцениваешь дозу каждого ингредиента относительно научно обоснованной терапевтической дозы
+4. Выявляешь потенциальные взаимодействия и противопоказания
+5. Считаешь соотношение цена/польза с учётом доказательной базы и реальной эффективности
+6. Предлагаешь более дешёвые аналоги с эквивалентным или лучшим составом
+
+ВАЖНО: Отвечаешь СТРОГО в формате JSON без markdown-обёртки, без ```json, без пояснений вне JSON.
+
+Формат ответа:
+{
+  "product_name": "название продукта или 'Не указано'",
+  "overall_score": <число 1-10, общая оценка>,
+  "price_value_ratio": <число 1-10, соотношение цена/польза>,
+  "verdict": "<краткий вердикт 1-2 предложения>",
+  "ingredients": [
+    {
+      "name": "<название ингредиента>",
+      "amount": "<доза в продукте или 'не указана'>",
+      "evidence_level": "<A|B|C|D>",
+      "evidence_comment": "<1 предложение о доказательной базе>",
+      "effective_dose": "<научно обоснованная суточная доза>",
+      "dose_assessment": "<достаточная|недостаточная|избыточная|не указана>",
+      "benefit": "<реальная польза или отсутствие таковой>"
+    }
+  ],
+  "pros": ["<плюс 1>", "<плюс 2>"],
+  "cons": ["<минус 1>", "<минус 2>"],
+  "interactions_warnings": "<предупреждения о взаимодействиях или 'Не выявлено'",
+  "cheaper_alternatives": [
+    {
+      "name": "<название аналога>",
+      "reason": "<почему лучше или эквивалентно>"
+    }
+  ],
+  "recommendation": "<итоговая рекомендация: стоит ли покупать и кому>"
+}
+
+Первый символ твоего ответа — {, последний — }. Никакого текста до или после.
+Будь лаконичен: каждое поле — максимум 1–2 предложения. Не более 3 аналогов. Не более 3 плюсов и 3 минусов."""
+
+MODEL = "claude-sonnet-4-6"
+
+_MEDIA_TYPES = {"jpeg": "image/jpeg", "png": "image/png", "gif": "image/gif", "webp": "image/webp"}
+
+
+def image_to_base64(image_bytes: bytes) -> str:
+    return base64.b64encode(image_bytes).decode("utf-8")
+
+
+def _detect_media_type(image_bytes: bytes) -> str:
+    fmt = imghdr.what(None, h=image_bytes)
+    return _MEDIA_TYPES.get(fmt, "image/jpeg")
+
+
+async def analyze_bad(user_text: str, image_base64: str = None, image_bytes: bytes = None) -> dict:
+    content = []
+
+    if image_bytes and not image_base64:
+        image_base64 = image_to_base64(image_bytes)
+
+    if image_base64:
+        # Восстанавливаем байты для определения формата только если они есть
+        raw_bytes = base64.b64decode(image_base64) if not image_bytes else image_bytes
+        media_type = _detect_media_type(raw_bytes)
+        content.append({
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": media_type,
+                "data": image_base64,
+            },
+        })
+
+    content.append({"type": "text", "text": user_text})
+
+    try:
+        response = await _client.messages.create(
+            model=MODEL,
+            max_tokens=8096,
+            system=SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": content}],
+        )
+        raw = response.content[0].text
+
+        start = raw.find("{")
+        end = raw.rfind("}")
+        if start == -1 or end == -1:
+            raise json.JSONDecodeError("no JSON object found", raw, 0)
+
+        return json.loads(raw[start:end + 1])
+
+    except json.JSONDecodeError:
+        logger.error("parse_error raw response: %s", response.content[0].text[:2000])
+        return {"error": "parse_error", "raw": response.content[0].text[:500]}
+    except Exception as e:
+        logger.error("analyze_bad error: %s", e)
+        return {"error": str(e)}
