@@ -211,29 +211,40 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text("⛔ Нет доступа\\.", parse_mode=ParseMode.MARKDOWN_V2)
         return
 
-    s = get_stats()
+    try:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info("Запрос статистики от %s", update.effective_user.id)
 
-    top_lines = ""
-    medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"]
-    for i, (name, count) in enumerate(s["top_products"]):
-        short = name[:40] + "…" if len(name) > 40 else name
-        top_lines += f"\n{medals[i]} {_esc(short)} — {count}"
+        s = get_stats()
+        logger.info("Статистика получена: %s", s)
 
-    text = (
-        "📊 *Статистика бота*\n"
-        "\n"
-        f"👥 Всего пользователей: *{s['total_users']}*\n"
-        f"🆕 Новых за 7 дней: *{s['new_week']}*\n"
-        f"💳 Платящих подписчиков: *{s['subscribers']}*\n"
-        "\n"
-        f"📨 Запросов сегодня: *{s['requests_today']}*\n"
-        f"📈 Запросов за 7 дней: *{s['requests_week']}*\n"
-    )
+        top_lines = ""
+        medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"]
+        for i, (name, count) in enumerate(s["top_products"]):
+            short = name[:40] + "…" if len(name) > 40 else name
+            top_lines += f"\n{medals[i]} {_esc(short)} — {count}"
 
-    if top_lines:
-        text += f"\n🔥 *Топ продуктов:*{top_lines}"
+        text = (
+            "📊 *Статистика бота*\n"
+            "\n"
+            f"👥 Всего пользователей: *{s['total_users']}*\n"
+            f"🆕 Новых за 7 дней: *{s['new_week']}*\n"
+            f"💳 Платящих подписчиков: *{s['subscribers']}*\n"
+            "\n"
+            f"📨 Запросов сегодня: *{s['requests_today']}*\n"
+            f"📈 Запросов за 7 дней: *{s['requests_week']}*\n"
+        )
 
-    await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN_V2)
+        if top_lines:
+            text += f"\n🔥 *Топ продуктов:*{top_lines}"
+
+        await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN_V2)
+
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error("Ошибка /stats: %s", e, exc_info=True)
+        await update.message.reply_text(f"❌ Ошибка: `{_esc(str(e))}`", parse_mode=ParseMode.MARKDOWN_V2)
 
 
 async def cmd_myid(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
