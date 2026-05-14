@@ -4,7 +4,7 @@ from telegram.constants import ParseMode
 
 from analyzer import analyze_bad, image_to_base64
 from config import PROXY_URL, ADMIN_ID
-from db import is_allowed, increment_requests, set_subscribed, remaining_free
+from db import is_allowed, increment_requests, set_subscribed, remaining_free, get_stats
 
 # ─── Константы ───────────────────────────────────────────────────────────────
 
@@ -206,6 +206,36 @@ async def _check_allowed(update: Update) -> bool:
     return True
 
 
+async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("⛔ Нет доступа\\.", parse_mode=ParseMode.MARKDOWN_V2)
+        return
+
+    s = get_stats()
+
+    top_lines = ""
+    medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"]
+    for i, (name, count) in enumerate(s["top_products"]):
+        short = name[:40] + "…" if len(name) > 40 else name
+        top_lines += f"\n{medals[i]} {_esc(short)} — {count}"
+
+    text = (
+        "📊 *Статистика бота*\n"
+        "\n"
+        f"👥 Всего пользователей: *{s['total_users']}*\n"
+        f"🆕 Новых за 7 дней: *{s['new_week']}*\n"
+        f"💳 Платящих подписчиков: *{s['subscribers']}*\n"
+        "\n"
+        f"📨 Запросов сегодня: *{s['requests_today']}*\n"
+        f"📈 Запросов за 7 дней: *{s['requests_week']}*\n"
+    )
+
+    if top_lines:
+        text += f"\n🔥 *Топ продуктов:*{top_lines}"
+
+    await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN_V2)
+
+
 async def cmd_myid(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     uid = update.effective_user.id
     await update.message.reply_text(f"Твой Telegram ID: `{uid}`", parse_mode=ParseMode.MARKDOWN_V2)
@@ -285,6 +315,7 @@ def build_app(token: str):
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("myid", cmd_myid))
     app.add_handler(CommandHandler("activate", cmd_activate))
+    app.add_handler(CommandHandler("stats", cmd_stats))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     return app

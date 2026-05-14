@@ -83,3 +83,50 @@ def remaining_free(user_id: int) -> int:
     user = get_or_create_user(user_id)
     used = user.get("requests_count", 0)
     return max(0, FREE_LIMIT - used)
+
+
+def get_stats() -> dict:
+    """Возвращает статистику для админа."""
+    from datetime import datetime, timezone, timedelta
+
+    now = datetime.now(timezone.utc)
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+    week_ago = (now - timedelta(days=7)).isoformat()
+
+    total_users = len(
+        _client.table("users").select("user_id").execute().data
+    )
+    new_week = len(
+        _client.table("users").select("user_id")
+        .gte("created_at", week_ago).execute().data
+    )
+    subscribers = len(
+        _client.table("users").select("user_id")
+        .eq("is_subscribed", True).execute().data
+    )
+    requests_today = len(
+        _client.table("requests").select("id")
+        .gte("created_at", today_start).execute().data
+    )
+    requests_week = len(
+        _client.table("requests").select("id")
+        .gte("created_at", week_ago).execute().data
+    )
+
+    # Топ-5 продуктов
+    all_requests = _client.table("requests").select("product_name").execute().data
+    counter: dict[str, int] = {}
+    for row in all_requests:
+        name = (row.get("product_name") or "—").strip()
+        if name:
+            counter[name] = counter.get(name, 0) + 1
+    top5 = sorted(counter.items(), key=lambda x: x[1], reverse=True)[:5]
+
+    return {
+        "total_users": total_users,
+        "new_week": new_week,
+        "subscribers": subscribers,
+        "requests_today": requests_today,
+        "requests_week": requests_week,
+        "top_products": top5,
+    }
