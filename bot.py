@@ -191,7 +191,7 @@ def _build_parts(data: dict) -> list[str]:
             if apteka:
                 price_parts.append(f"Аптека\\.ру: {_esc(apteka)}")
             if price_parts:
-                lines.append(f"   _{'  |  '.join(price_parts)}_")
+                lines.append(f"   _{'  ·  '.join(price_parts)}_")
         lines.append(
             "\n⚠️ _Цены ориентировочные — реальные могут отличаться\\. "
             "Проверяй перед покупкой на WB/Ozon/Аптека\\.ру_"
