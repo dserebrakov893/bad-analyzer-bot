@@ -1,5 +1,5 @@
-python-telegram-bot==20.7
+python-telegram-bot==21.10
 anthropic
 python-dotenv
-httpx==0.25.2
-supabase==1.2.0
+httpx==0.28.1
+supabase==2.30.0
