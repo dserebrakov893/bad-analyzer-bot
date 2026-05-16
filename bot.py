@@ -1,5 +1,5 @@
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, ConversationHandler, filters, ContextTypes
 from telegram.constants import ParseMode
 
 from analyzer import analyze_bad, image_to_base64
@@ -9,6 +9,7 @@ from db import is_allowed, increment_requests, set_subscribed, remaining_free, g
 # ─── Константы ───────────────────────────────────────────────────────────────
 
 TG_LIMIT = 4096
+WAITING_PRICE = 1  # состояние ConversationHandler: ждём цену после фото
 
 WELCOME = (
     "Средний россиянин тратит *4 200 ₽/мес* на витамины и БАДы\\. "
@@ -416,29 +417,57 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         increment_requests(user_id, product)
 
 
-async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Шаг 1: получаем фото, сохраняем, просим цену."""
     if not await _check_allowed(update):
-        return
-
-    user_id = update.effective_user.id
-
-    await update.message.chat.send_action("typing")
+        return ConversationHandler.END
 
     photo = update.message.photo[-1]
     tg_file = await context.bot.get_file(photo.file_id)
     image_bytes = bytes(await tg_file.download_as_bytearray())
 
-    caption = update.message.caption or "Проанализируй состав БАД на этикетке"
+    # Сохраняем фото и подпись (если есть) до следующего шага
+    context.user_data["pending_image_bytes"] = image_bytes
+    context.user_data["pending_caption"] = update.message.caption or ""
+
+    await update.message.reply_text(
+        "Фото получил\\! Укажи цену с упаковки в рублях — подберу аналог дешевле 👇",
+        parse_mode="MarkdownV2",
+    )
+    return WAITING_PRICE
+
+
+async def handle_price(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Шаг 2: получаем цену, запускаем анализ фото + цена."""
+    user_id = update.effective_user.id
+    price_text = update.message.text.strip()
+
+    image_bytes: bytes = context.user_data.pop("pending_image_bytes", None)
+    caption: str = context.user_data.pop("pending_caption", "")
+
+    if not image_bytes:
+        await update.message.reply_text("Что-то пошло не так — отправь фото ещё раз\\.", parse_mode="MarkdownV2")
+        return ConversationHandler.END
+
+    # Формируем запрос: состав с этикетки + цена от пользователя
+    user_text = "Проанализируй состав БАД на этикетке"
+    if caption:
+        user_text = caption
+    user_text += f"\nЦена упаковки: {price_text} руб."
+
+    await update.message.chat.send_action("typing")
     data = await analyze_bad(
-        user_text=caption,
+        user_text=user_text,
         image_base64=image_to_base64(image_bytes),
         image_bytes=image_bytes,
     )
     await _send_result(update, data)
 
     if "error" not in data:
-        product = data.get("product_name", caption[:100])
+        product = data.get("product_name", user_text[:100])
         increment_requests(user_id, product)
+
+    return ConversationHandler.END
 
 
 # ─── Сборка приложения ────────────────────────────────────────────────────────
@@ -448,11 +477,27 @@ def build_app(token: str):
     if PROXY_URL:
         builder = builder.proxy(PROXY_URL).get_updates_proxy(PROXY_URL)
     app = builder.build()
+
+    # Диалог: фото → запрос цены → анализ
+    photo_conv = ConversationHandler(
+        entry_points=[MessageHandler(filters.PHOTO, handle_photo)],
+        states={
+            WAITING_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_price)],
+        },
+        fallbacks=[
+            CommandHandler("start", cmd_start),
+            # Любая команда прерывает ожидание цены
+            MessageHandler(filters.COMMAND, lambda u, c: ConversationHandler.END),
+        ],
+        per_user=True,
+        per_chat=True,
+    )
+
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("myid", cmd_myid))
     app.add_handler(CommandHandler("activate", cmd_activate))
     app.add_handler(CommandHandler("stats", cmd_stats))
     app.add_handler(CallbackQueryHandler(handle_callback))
+    app.add_handler(photo_conv)  # ConversationHandler перехватывает фото и ответ с ценой
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-    app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     return app
