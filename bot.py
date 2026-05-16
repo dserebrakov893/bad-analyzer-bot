@@ -176,6 +176,22 @@ def _build_parts(data: dict) -> list[str]:
             alt_name = _esc(alt.get("name", "?"))
             alt_reason = _esc(alt.get("reason", ""))
             lines.append(f"• *{alt_name}* — {alt_reason}")
+            wb = alt.get("wb_price", "")
+            ozon = alt.get("ozon_price", "")
+            apteka = alt.get("apteka_price", "")
+            price_parts = []
+            if wb:
+                price_parts.append(f"WB: {_esc(wb)}")
+            if ozon:
+                price_parts.append(f"Ozon: {_esc(ozon)}")
+            if apteka:
+                price_parts.append(f"Аптека\\.ру: {_esc(apteka)}")
+            if price_parts:
+                lines.append(f"   _{'  |  '.join(price_parts)}_")
+        lines.append(
+            "\n⚠️ _Цены ориентировочные — реальные могут отличаться\\. "
+            "Проверяй перед покупкой на WB/Ozon/Аптека\\.ру_"
+        )
         parts.append("\n".join(lines))
 
     # Итог
