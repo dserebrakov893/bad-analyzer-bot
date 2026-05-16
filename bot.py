@@ -1,5 +1,5 @@
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 from telegram.constants import ParseMode
 
 from analyzer import analyze_bad, image_to_base64
@@ -17,10 +17,53 @@ WELCOME = (
     "обычно в 2–3 раза\\.\n\n"
     "В отличие от ChatGPT и других LLM, я заточен только под это, "
     "отвечаю структурированно, работаю с фото этикетки и сразу даю "
-    "конкретный аналог с ценой\\.\n\n"
-    "Пришли любой БАД — покажу где ты переплачиваешь\\.\n\n"
-    "_3 разбора бесплатно, далее — подписка 149 ₽/мес\\. "
-    "Это дешевле одной ненужной банки\\._"
+    "конкретный аналог с ценой\\."
+)
+
+# ─── Тексты экранов ───────────────────────────────────────────────────────────
+
+SCREEN_CHECK = (
+    "🔬 *Проверить БАД*\n\n"
+    "Просто напиши название и состав, например:\n"
+    "_Омега\\-3 Доппельгерц 1000мг, EPA 180мг DHA 120мг, 30 капсул, 890 руб_\n\n"
+    "Или отправь *фото этикетки* — прочитаю состав сам\\.\n\n"
+    "Чем больше информации \\(цена, количество капсул\\) — тем точнее анализ\\."
+)
+
+SCREEN_EXAMPLES = (
+    "📋 *Примеры разборов*\n\n"
+    "🔴 *Омега\\-3 Доппельгерц* — цена/польза 2/10\n"
+    "_EPA 180мг \\+ DHA 120мг — в 3–5 раз ниже терапевтической дозы\\. "
+    "Переплата за бренд, аналог в 2 раза дешевле\\._\n\n"
+    "🔴 *Коллаген Эвалар 900мг* — цена/польза 2/10\n"
+    "_Доза в 10 раз ниже нормы \\(нужно 10г/сут\\)\\. "
+    "Маркетинговый продукт без реальной эффективности\\._\n\n"
+    "🟢 *Витамин D3 NOW Foods 5000 IU* — цена/польза 9/10\n"
+    "_Доказанная эффективность, надёжный производитель, "
+    "минимальная цена за дозу\\._"
+)
+
+SCREEN_HOW = (
+    "❓ *Как это работает*\n\n"
+    "1\\. Ты присылаешь название БАД или фото этикетки\n"
+    "2\\. Я анализирую каждый ингредиент по доказательной базе:\n"
+    "   ✅ Доказано — метаанализы, RCT\n"
+    "   🟡 Вероятно работает — отдельные исследования\n"
+    "   🟠 Мало данных — ограниченные данные\n"
+    "   ❌ Не доказано — нет исследований\n\n"
+    "3\\. Оцениваю дозу каждого компонента\n"
+    "4\\. Считаю цена/польза от 1 до 10\n"
+    "5\\. Нахожу аналог дешевле с тем же эффектом\n\n"
+    "_Анализирую как нутрициолог, не как маркетолог\\._"
+)
+
+SCREEN_SUB = (
+    "💳 *Подписка*\n\n"
+    "Бесплатно: *3 разбора*\n"
+    "Подписка: *149 ₽/мес*\n\n"
+    "Это дешевле одной ненужной банки витаминов\\.\n\n"
+    "👉 [Оплатить подписку](https://t.me/tribute/app?startapp=dKdT)\n\n"
+    "_После оплаты напиши /activate_"
 )
 
 DISCLAIMER = (
@@ -192,8 +235,74 @@ async def _send_result(update: Update, data: dict) -> None:
         await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN_V2)
 
 
+def _main_menu() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔬 Проверить БАД", callback_data="check")],
+        [InlineKeyboardButton("📋 Примеры разборов", callback_data="examples"),
+         InlineKeyboardButton("❓ Как это работает", callback_data="how")],
+        [InlineKeyboardButton("💳 Подписка", callback_data="sub"),
+         InlineKeyboardButton("📊 Мой счёт", callback_data="score")],
+    ])
+
+
+def _back_menu() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("← Главное меню", callback_data="main")]
+    ])
+
+
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text(WELCOME, parse_mode=ParseMode.MARKDOWN_V2)
+    await update.message.reply_text(
+        WELCOME,
+        parse_mode=ParseMode.MARKDOWN_V2,
+        reply_markup=_main_menu(),
+    )
+
+
+async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+
+    if data == "main":
+        await query.edit_message_text(WELCOME, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=_main_menu())
+
+    elif data == "check":
+        await query.edit_message_text(SCREEN_CHECK, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=_back_menu())
+
+    elif data == "examples":
+        await query.edit_message_text(SCREEN_EXAMPLES, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=_back_menu())
+
+    elif data == "how":
+        await query.edit_message_text(SCREEN_HOW, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=_back_menu())
+
+    elif data == "sub":
+        await query.edit_message_text(SCREEN_SUB, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=_back_menu())
+
+    elif data == "score":
+        user_id = query.from_user.id
+        user = __import__("db").get_or_create_user(user_id)
+        count = user.get("requests_count", 0)
+        subscribed = user.get("is_subscribed", False)
+        until = user.get("subscribed_until", "")
+
+        if subscribed and until:
+            from datetime import datetime, timezone
+            until_dt = datetime.fromisoformat(until.replace("Z", "+00:00"))
+            until_str = _esc(until_dt.strftime("%d.%m.%Y"))
+            status = f"💳 Подписка активна до {until_str}"
+        elif subscribed:
+            status = "💳 Подписка активна"
+        else:
+            remaining = max(0, 3 - count)
+            status = f"🆓 Бесплатных разборов осталось: *{remaining}/3*"
+
+        text = (
+            "📊 *Мой счёт*\n\n"
+            f"Всего запросов: *{_esc(str(count))}*\n"
+            f"{status}"
+        )
+        await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=_back_menu())
 
 
 async def _check_allowed(update: Update) -> bool:
@@ -327,6 +436,7 @@ def build_app(token: str):
     app.add_handler(CommandHandler("myid", cmd_myid))
     app.add_handler(CommandHandler("activate", cmd_activate))
     app.add_handler(CommandHandler("stats", cmd_stats))
+    app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     return app
