@@ -1,5 +1,4 @@
 import base64
-import imghdr
 import json
 import logging
 import re
@@ -61,16 +60,21 @@ SYSTEM_PROMPT = """Ты — эксперт-нутрициолог с медиц�
 
 MODEL = "claude-sonnet-4-6"
 
-_MEDIA_TYPES = {"jpeg": "image/jpeg", "png": "image/png", "gif": "image/gif", "webp": "image/webp"}
-
-
 def image_to_base64(image_bytes: bytes) -> str:
     return base64.b64encode(image_bytes).decode("utf-8")
 
 
 def _detect_media_type(image_bytes: bytes) -> str:
-    fmt = imghdr.what(None, h=image_bytes)
-    return _MEDIA_TYPES.get(fmt, "image/jpeg")
+    """Определяет тип изображения по magic bytes — без imghdr."""
+    if image_bytes[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png"
+    if image_bytes[:3] == b"\xff\xd8\xff":
+        return "image/jpeg"
+    if image_bytes[:6] in (b"GIF87a", b"GIF89a"):
+        return "image/gif"
+    if image_bytes[8:12] == b"WEBP":
+        return "image/webp"
+    return "image/jpeg"  # fallback
 
 
 async def analyze_bad(user_text: str, image_base64: str = None, image_bytes: bytes = None) -> dict:
