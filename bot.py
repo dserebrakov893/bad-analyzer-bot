@@ -1,3 +1,5 @@
+import logging
+
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 from telegram.constants import ParseMode
@@ -5,6 +7,8 @@ from telegram.constants import ParseMode
 from analyzer import analyze_bad, image_to_base64
 from config import PROXY_URL, ADMIN_ID
 from db import is_allowed, increment_requests, set_subscribed, remaining_free, get_stats
+
+logger = logging.getLogger(__name__)
 
 # ─── Константы ───────────────────────────────────────────────────────────────
 
@@ -404,47 +408,63 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     user_id = update.effective_user.id
     user_text = update.message.text.strip()
 
-    # Есть сохранённое фото — значит пользователь отвечает ценой
-    image_bytes: bytes = context.user_data.pop("pending_photo", None)
-    if image_bytes:
-        user_text_full = f"Проанализируй состав БАД на этикетке.\nЦена упаковки: {user_text} руб."
+    try:
+        # Есть сохранённое фото — значит пользователь отвечает ценой
+        image_bytes: bytes = context.user_data.pop("pending_photo", None)
+        if image_bytes:
+            user_text_full = f"Проанализируй состав БАД на этикетке.\nЦена упаковки: {user_text} руб."
+            if not await _check_allowed(update):
+                return
+            await update.message.chat.send_action("typing")
+            data = await analyze_bad(
+                user_text=user_text_full,
+                image_base64=image_to_base64(image_bytes),
+                image_bytes=image_bytes,
+            )
+            await _send_result(update, data)
+            if "error" not in data:
+                increment_requests(user_id, data.get("product_name", user_text_full[:100]))
+            return
+
+        # Обычный текстовый запрос
         if not await _check_allowed(update):
             return
         await update.message.chat.send_action("typing")
-        data = await analyze_bad(
-            user_text=user_text_full,
-            image_base64=image_to_base64(image_bytes),
-            image_bytes=image_bytes,
-        )
+        data = await analyze_bad(user_text=user_text)
         await _send_result(update, data)
         if "error" not in data:
-            increment_requests(user_id, data.get("product_name", user_text_full[:100]))
-        return
+            increment_requests(user_id, data.get("product_name", user_text[:100]))
 
-    # Обычный текстовый запрос
-    if not await _check_allowed(update):
-        return
-    await update.message.chat.send_action("typing")
-    data = await analyze_bad(user_text=user_text)
-    await _send_result(update, data)
-    if "error" not in data:
-        increment_requests(user_id, data.get("product_name", user_text[:100]))
+    except Exception as e:
+        logger.error("handle_text error (user=%s): %s", user_id, e, exc_info=True)
+        try:
+            await update.message.reply_text(f"Произошла ошибка: {e}")
+        except Exception:
+            pass
 
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await _check_allowed(update):
-        return
+    user_id = update.effective_user.id
+    try:
+        if not await _check_allowed(update):
+            return
 
-    photo = update.message.photo[-1]
-    tg_file = await context.bot.get_file(photo.file_id)
-    image_bytes = bytes(await tg_file.download_as_bytearray())
+        photo = update.message.photo[-1]
+        tg_file = await context.bot.get_file(photo.file_id)
+        image_bytes = bytes(await tg_file.download_as_bytearray())
 
-    context.user_data["pending_photo"] = image_bytes
+        context.user_data["pending_photo"] = image_bytes
 
-    await update.message.reply_text(
-        "Фото получил\\! Укажи цену с упаковки в рублях — подберу аналог дешевле 👇",
-        parse_mode="MarkdownV2",
-    )
+        await update.message.reply_text(
+            "Фото получил\\! Укажи цену с упаковки в рублях — подберу аналог дешевле 👇",
+            parse_mode="MarkdownV2",
+        )
+    except Exception as e:
+        logger.error("handle_photo error (user=%s): %s", user_id, e, exc_info=True)
+        try:
+            await update.message.reply_text(f"Произошла ошибка: {e}")
+        except Exception:
+            pass
 
 
 # ─── Сборка приложения ────────────────────────────────────────────────────────
