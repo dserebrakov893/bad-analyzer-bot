@@ -1,7 +1,14 @@
 import logging
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
+from telegram import (
+    Update, InlineKeyboardButton, InlineKeyboardMarkup,
+    SwitchInlineQueryChosenChat,
+    InlineQueryResultArticle, InputTextMessageContent,
+)
+from telegram.ext import (
+    ApplicationBuilder, CommandHandler, MessageHandler,
+    CallbackQueryHandler, InlineQueryHandler, filters, ContextTypes,
+)
 from telegram.constants import ParseMode
 
 from analyzer import analyze_bad, image_to_base64
@@ -261,9 +268,39 @@ def format_result(data: dict) -> list[str]:
 
 # ─── Хэндлеры ────────────────────────────────────────────────────────────────
 
+def _share_button(data: dict) -> InlineKeyboardMarkup:
+    """Кнопка 'Поделиться результатом' через inline-режим."""
+    product = data.get("product_name", "БАД")[:60]
+    score = str(data.get("overall_score", "?"))
+    verdict = (data.get("verdict", ""))[:120]
+    # Кодируем данные в query — max 256 символов
+    query = f"share|{product}|{score}|{verdict}"[:256]
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton(
+            "📤 Поделиться результатом",
+            switch_inline_query_chosen_chat=SwitchInlineQueryChosenChat(
+                query=query,
+                allow_user_chats=True,
+                allow_bot_chats=False,
+                allow_group_chats=True,
+                allow_channel_chats=True,
+            ),
+        )
+    ]])
+
+
 async def _send_result(update: Update, data: dict) -> None:
-    for msg in format_result(data):
-        await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN_V2)
+    messages = format_result(data)
+    for i, msg in enumerate(messages):
+        # Кнопку шаринга добавляем только к последнему сообщению и только при успехе
+        if i == len(messages) - 1 and "error" not in data:
+            await update.message.reply_text(
+                msg,
+                parse_mode=ParseMode.MARKDOWN_V2,
+                reply_markup=_share_button(data),
+            )
+        else:
+            await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN_V2)
 
 
 def _main_menu() -> InlineKeyboardMarkup:
@@ -632,10 +669,40 @@ def build_app(token: str):
     app.add_handler(CommandHandler("unlimited", cmd_unlimited))
     app.add_handler(CommandHandler("stats", cmd_stats))
     app.add_handler(CallbackQueryHandler(handle_callback))
+    app.add_handler(InlineQueryHandler(handle_inline_query))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_error_handler(global_error_handler)
     return app
+
+
+async def handle_inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обрабатывает inline-запрос при нажатии кнопки 'Поделиться'."""
+    query_text = update.inline_query.query
+
+    if not query_text.startswith("share|"):
+        await update.inline_query.answer([], cache_time=0)
+        return
+
+    parts = query_text.split("|", 3)
+    product = parts[1] if len(parts) > 1 else "БАД"
+    score = parts[2] if len(parts) > 2 else "?"
+    verdict = parts[3] if len(parts) > 3 else ""
+
+    share_text = (
+        f"Проверил {product} в боте @composition_or_marketing_bot\n\n"
+        f"Оценка: {score}/10\n"
+        + (f"{verdict}\n\n" if verdict else "\n")
+        + "Проверь свои БАД бесплатно 👆"
+    )
+
+    result = InlineQueryResultArticle(
+        id="share_result",
+        title=f"Поделиться: {product} — {score}/10",
+        description=verdict[:100] if verdict else "Результат анализа БАД",
+        input_message_content=InputTextMessageContent(share_text),
+    )
+    await update.inline_query.answer([result], cache_time=0)
 
 
 async def global_error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
