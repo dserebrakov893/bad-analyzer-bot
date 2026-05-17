@@ -272,11 +272,15 @@ def _back_menu() -> InlineKeyboardMarkup:
 
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text(
-        WELCOME,
-        parse_mode=ParseMode.MARKDOWN_V2,
-        reply_markup=_main_menu(),
-    )
+    try:
+        await update.message.reply_text(
+            WELCOME,
+            parse_mode=ParseMode.MARKDOWN_V2,
+            reply_markup=_main_menu(),
+        )
+    except Exception as e:
+        logger.error("cmd_start error: %s", e, exc_info=True)
+        await update.message.reply_text(f"Произошла ошибка: {e}")
 
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -468,27 +472,39 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text(
-        SCREEN_HOW,
-        parse_mode=ParseMode.MARKDOWN_V2,
-        reply_markup=_back_menu(),
-    )
+    try:
+        await update.message.reply_text(
+            SCREEN_HOW,
+            parse_mode=ParseMode.MARKDOWN_V2,
+            reply_markup=_back_menu(),
+        )
+    except Exception as e:
+        logger.error("cmd_help error: %s", e, exc_info=True)
+        await update.message.reply_text(f"Произошла ошибка: {e}")
 
 
 async def cmd_examples(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text(
-        SCREEN_EXAMPLES,
-        parse_mode=ParseMode.MARKDOWN_V2,
-        reply_markup=_back_menu(),
-    )
+    try:
+        await update.message.reply_text(
+            SCREEN_EXAMPLES,
+            parse_mode=ParseMode.MARKDOWN_V2,
+            reply_markup=_back_menu(),
+        )
+    except Exception as e:
+        logger.error("cmd_examples error: %s", e, exc_info=True)
+        await update.message.reply_text(f"Произошла ошибка: {e}")
 
 
 async def cmd_subscribe(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text(
-        SCREEN_SUB,
-        parse_mode=ParseMode.MARKDOWN_V2,
-        reply_markup=_back_menu(),
-    )
+    try:
+        await update.message.reply_text(
+            SCREEN_SUB,
+            parse_mode=ParseMode.MARKDOWN_V2,
+            reply_markup=_back_menu(),
+        )
+    except Exception as e:
+        logger.error("cmd_subscribe error: %s", e, exc_info=True)
+        await update.message.reply_text(f"Произошла ошибка: {e}")
 
 
 async def cmd_account(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -548,4 +564,15 @@ def build_app(token: str):
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+    app.add_error_handler(global_error_handler)
     return app
+
+
+async def global_error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Ловит все необработанные исключения из хэндлеров, логирует и сообщает пользователю."""
+    logger.error("Unhandled exception in handler", exc_info=context.error)
+    if isinstance(update, Update) and update.message:
+        try:
+            await update.message.reply_text(f"Произошла ошибка: {context.error}")
+        except Exception:
+            pass
