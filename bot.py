@@ -640,6 +640,13 @@ def build_app(token: str):
 
 async def global_error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Ловит все необработанные исключения из хэндлеров, логирует и сообщает пользователю."""
+    from telegram.error import Conflict, NetworkError, TimedOut
+
+    # Conflict и сетевые ошибки — не баг хэндлера, main.py сам разберётся
+    if isinstance(context.error, (Conflict, NetworkError, TimedOut)):
+        logger.warning("Network-level error (handled by retry loop): %s", context.error)
+        return
+
     logger.error("Unhandled exception in handler", exc_info=context.error)
     if isinstance(update, Update) and update.message:
         try:

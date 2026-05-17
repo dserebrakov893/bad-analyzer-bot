@@ -3,6 +3,8 @@ import os
 import subprocess
 import time
 
+from telegram.error import Conflict
+
 from config import TELEGRAM_TOKEN
 from bot import build_app
 
@@ -16,6 +18,7 @@ logging.getLogger("telegram").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 MAX_RETRY_WAIT = 60  # максимальная пауза между перезапусками (сек)
+CONFLICT_WAIT = 30   # ждём дольше при Conflict — старый контейнер должен умереть
 
 
 def run() -> None:
@@ -44,14 +47,25 @@ def run() -> None:
             # run_polling вернул управление — нештатная ситуация, перезапускаем
             logger.warning("run_polling завершился — перезапуск через 5 сек...")
             time.sleep(5)
+            retry = 0  # сброс счётчика при нормальной работе
 
         except KeyboardInterrupt:
             logger.info("Получен KeyboardInterrupt — остановка.")
             break
 
+        except Conflict:
+            # Другой экземпляр (старый деплой) ещё не умер — ждём дольше
+            retry += 1
+            logger.warning(
+                "Conflict: другой экземпляр бота ещё работает. "
+                "Ожидание %d сек перед повтором (попытка %d)...",
+                CONFLICT_WAIT, retry,
+            )
+            time.sleep(CONFLICT_WAIT)
+
         except Exception as e:
             retry += 1
-            wait = min(MAX_RETRY_WAIT, 2 ** min(retry, 6))  # 2, 4, 8, 16, 32, 60, 60...
+            wait = min(MAX_RETRY_WAIT, 2 ** min(retry, 6))  # 2, 4, 8, 16, 32, 60...
             logger.error(
                 "Бот упал: %s. Перезапуск через %d сек (попытка %d)...",
                 e, wait, retry,
