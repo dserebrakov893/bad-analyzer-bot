@@ -449,10 +449,14 @@ async def _analyze_and_reply(
 ) -> None:
     """Отправляет заглушку → вызывает analyze_bad → удаляет заглушку → шлёт результат."""
     user_id = update.effective_user.id
+    placeholder = None
 
-    # 1. Заглушка + typing
-    await update.message.chat.send_action("typing")
-    placeholder = await update.message.reply_text("🔬 Анализирую состав... обычно 10–15 секунд")
+    try:
+        # 1. Заглушка + typing
+        await update.message.chat.send_action("typing")
+        placeholder = await update.message.reply_text("🔬 Анализирую состав... обычно 10–15 секунд")
+    except Exception as e:
+        logger.warning("Не удалось отправить placeholder: %s", e)
 
     # 2. Анализ
     kwargs = {"user_text": user_text}
@@ -461,14 +465,23 @@ async def _analyze_and_reply(
         kwargs["image_bytes"] = image_bytes
     data = await analyze_bad(**kwargs)
 
+    # Логируем наличие новых полей для диагностики
+    logger.info(
+        "analyze_bad result keys: %s | pairs=%s | avoid=%s",
+        list(data.keys()),
+        data.get("pairs_well_with"),
+        data.get("avoid_with"),
+    )
+
     # 3. Удаляем заглушку
-    try:
-        await context.bot.delete_message(
-            chat_id=update.effective_chat.id,
-            message_id=placeholder.message_id,
-        )
-    except Exception:
-        pass  # не критично если не удалилось
+    if placeholder:
+        try:
+            await context.bot.delete_message(
+                chat_id=update.effective_chat.id,
+                message_id=placeholder.message_id,
+            )
+        except Exception:
+            pass  # не критично если не удалилось
 
     # 4. Результат
     await _send_result(update, data)
