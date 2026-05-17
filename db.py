@@ -1,7 +1,7 @@
 import logging
 from datetime import datetime, timedelta, timezone
 from supabase import create_client, Client
-from config import SUPABASE_URL, SUPABASE_KEY
+from config import SUPABASE_URL, SUPABASE_KEY, ADMIN_IDS
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +30,10 @@ def get_or_create_user(user_id: int) -> dict:
 
 def is_allowed(user_id: int) -> bool:
     """True если пользователь подписан или не исчерпал лимит бесплатных запросов."""
+    # Администраторы всегда имеют доступ
+    if user_id in ADMIN_IDS:
+        return True
+
     user = get_or_create_user(user_id)
     count = user.get("requests_count", 0)
 

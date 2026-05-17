@@ -408,6 +408,28 @@ async def cmd_activate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     )
 
 
+async def cmd_unlimited(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Устанавливает подписку на 10 лет для указанного user_id. Только для ADMIN_ID."""
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("⛔ Нет доступа\\.", parse_mode=ParseMode.MARKDOWN_V2)
+        return
+
+    args = context.args
+    if not args or not args[0].isdigit():
+        await update.message.reply_text(
+            "Использование: `/unlimited 123456789`",
+            parse_mode=ParseMode.MARKDOWN_V2,
+        )
+        return
+
+    target_id = int(args[0])
+    set_subscribed(target_id, days=365 * 10)
+    await update.message.reply_text(
+        f"✅ Безлимит активирован для `{target_id}` на 10 лет\\.",
+        parse_mode=ParseMode.MARKDOWN_V2,
+    )
+
+
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     user_text = update.message.text.strip()
@@ -560,6 +582,7 @@ def build_app(token: str):
     app.add_handler(CommandHandler("account", cmd_account))
     app.add_handler(CommandHandler("myid", cmd_myid))
     app.add_handler(CommandHandler("activate", cmd_activate))
+    app.add_handler(CommandHandler("unlimited", cmd_unlimited))
     app.add_handler(CommandHandler("stats", cmd_stats))
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
