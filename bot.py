@@ -430,6 +430,41 @@ async def cmd_unlimited(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     )
 
 
+async def _analyze_and_reply(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    user_text: str,
+    image_bytes: bytes = None,
+) -> None:
+    """Отправляет заглушку → вызывает analyze_bad → удаляет заглушку → шлёт результат."""
+    user_id = update.effective_user.id
+
+    # 1. Заглушка + typing
+    await update.message.chat.send_action("typing")
+    placeholder = await update.message.reply_text("🔬 Анализирую состав... обычно 10–15 секунд")
+
+    # 2. Анализ
+    kwargs = {"user_text": user_text}
+    if image_bytes:
+        kwargs["image_base64"] = image_to_base64(image_bytes)
+        kwargs["image_bytes"] = image_bytes
+    data = await analyze_bad(**kwargs)
+
+    # 3. Удаляем заглушку
+    try:
+        await context.bot.delete_message(
+            chat_id=update.effective_chat.id,
+            message_id=placeholder.message_id,
+        )
+    except Exception:
+        pass  # не критично если не удалилось
+
+    # 4. Результат
+    await _send_result(update, data)
+    if "error" not in data:
+        increment_requests(user_id, data.get("product_name", user_text[:100]))
+
+
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     user_text = update.message.text.strip()
@@ -438,28 +473,16 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         # Есть сохранённое фото — значит пользователь отвечает ценой
         image_bytes: bytes = context.user_data.pop("pending_photo", None)
         if image_bytes:
-            user_text_full = f"Проанализируй состав БАД на этикетке.\nЦена упаковки: {user_text} руб."
             if not await _check_allowed(update):
                 return
-            await update.message.chat.send_action("typing")
-            data = await analyze_bad(
-                user_text=user_text_full,
-                image_base64=image_to_base64(image_bytes),
-                image_bytes=image_bytes,
-            )
-            await _send_result(update, data)
-            if "error" not in data:
-                increment_requests(user_id, data.get("product_name", user_text_full[:100]))
+            user_text_full = f"Проанализируй состав БАД на этикетке.\nЦена упаковки: {user_text} руб."
+            await _analyze_and_reply(update, context, user_text_full, image_bytes=image_bytes)
             return
 
         # Обычный текстовый запрос
         if not await _check_allowed(update):
             return
-        await update.message.chat.send_action("typing")
-        data = await analyze_bad(user_text=user_text)
-        await _send_result(update, data)
-        if "error" not in data:
-            increment_requests(user_id, data.get("product_name", user_text[:100]))
+        await _analyze_and_reply(update, context, user_text)
 
     except Exception as e:
         logger.error("handle_text error (user=%s): %s", user_id, e, exc_info=True)
