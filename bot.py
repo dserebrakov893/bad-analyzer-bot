@@ -484,7 +484,7 @@ async def _analyze_and_reply(
     user_text: str,
     image_bytes: bytes = None,
 ) -> None:
-    """Отправляет заглушку → вызывает analyze_bad → удаляет заглушку → шлёт результат."""
+    """Отправляет заглушку → вызывает analyze_bad → заменяет заглушку первым сообщением результата."""
     user_id = update.effective_user.id
     placeholder = None
 
@@ -502,26 +502,48 @@ async def _analyze_and_reply(
         kwargs["image_bytes"] = image_bytes
     data = await analyze_bad(**kwargs)
 
-    # Логируем наличие новых полей для диагностики
     logger.info(
-        "analyze_bad result keys: %s | pairs=%s | avoid=%s",
-        list(data.keys()),
-        data.get("pairs_well_with"),
-        data.get("avoid_with"),
+        "analyze_bad keys=%s pairs=%s avoid=%s",
+        list(data.keys()), data.get("pairs_well_with"), data.get("avoid_with"),
     )
 
-    # 3. Удаляем заглушку
-    if placeholder:
-        try:
-            await context.bot.delete_message(
-                chat_id=update.effective_chat.id,
-                message_id=placeholder.message_id,
-            )
-        except Exception:
-            pass  # не критично если не удалилось
+    # 3. Формируем сообщения результата
+    messages = format_result(data)
 
-    # 4. Результат
-    await _send_result(update, data)
+    # 4. Первое сообщение — редактируем placeholder (он остаётся видимым)
+    #    Последнее сообщение получает кнопку "Поделиться"
+    share_markup = _share_button(data) if "error" not in data else None
+
+    first_markup = share_markup if len(messages) == 1 else None
+
+    if placeholder and messages:
+        try:
+            await placeholder.edit_text(
+                messages[0],
+                parse_mode=ParseMode.MARKDOWN_V2,
+                reply_markup=first_markup,
+            )
+            remaining = messages[1:]
+        except Exception as e:
+            logger.warning("Не удалось отредактировать placeholder: %s", e)
+            # Fallback: удаляем и шлём заново
+            try:
+                await placeholder.delete()
+            except Exception:
+                pass
+            remaining = messages
+    else:
+        remaining = messages
+
+    # 5. Оставшиеся сообщения (если результат длинный)
+    for i, msg in enumerate(remaining):
+        is_last = (i == len(remaining) - 1)
+        await update.message.reply_text(
+            msg,
+            parse_mode=ParseMode.MARKDOWN_V2,
+            reply_markup=share_markup if is_last else None,
+        )
+
     if "error" not in data:
         increment_requests(user_id, data.get("product_name", user_text[:100]))
 
