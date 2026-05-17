@@ -676,7 +676,17 @@ async def cmd_account(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 # ─── Сборка приложения ────────────────────────────────────────────────────────
 
 def build_app(token: str):
-    builder = ApplicationBuilder().token(token)
+    builder = (
+        ApplicationBuilder()
+        .token(token)
+        .get_updates_read_timeout(30)
+        .get_updates_write_timeout(30)
+        .get_updates_connect_timeout(30)
+        .get_updates_pool_timeout(30)
+        .read_timeout(30)
+        .write_timeout(30)
+        .connect_timeout(30)
+    )
     if PROXY_URL:
         builder = builder.proxy(PROXY_URL).get_updates_proxy(PROXY_URL)
     app = builder.build()

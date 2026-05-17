@@ -36,14 +36,7 @@ def run() -> None:
         try:
             logger.info("Запуск polling (попытка %d)...", retry + 1)
             app = build_app(TELEGRAM_TOKEN)
-            app.run_polling(
-                drop_pending_updates=True,
-                timeout=30,
-                read_timeout=30,
-                write_timeout=30,
-                connect_timeout=30,
-                pool_timeout=30,
-            )
+            app.run_polling(drop_pending_updates=True)
             # run_polling вернул управление — нештатная ситуация, перезапускаем
             logger.warning("run_polling завершился — перезапуск через 5 сек...")
             time.sleep(5)
