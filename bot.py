@@ -198,6 +198,17 @@ def _build_parts(data: dict) -> list[str]:
         )
         parts.append("\n".join(lines))
 
+    # Сочетания и несовместимость
+    pairs = data.get("pairs_well_with", [])
+    if pairs:
+        items = ", ".join(_esc(p) for p in pairs)
+        parts.append(f"✅ *Хорошо сочетается с:* {items}")
+
+    avoid = data.get("avoid_with", [])
+    if avoid:
+        items = ", ".join(_esc(a) for a in avoid)
+        parts.append(f"⛔ *Не принимать одновременно с:* {items}")
+
     # Итог
     rec = data.get("recommendation", "")
     if rec:
