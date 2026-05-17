@@ -467,6 +467,68 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             pass
 
 
+async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.message.reply_text(
+        SCREEN_HOW,
+        parse_mode=ParseMode.MARKDOWN_V2,
+        reply_markup=_back_menu(),
+    )
+
+
+async def cmd_examples(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.message.reply_text(
+        SCREEN_EXAMPLES,
+        parse_mode=ParseMode.MARKDOWN_V2,
+        reply_markup=_back_menu(),
+    )
+
+
+async def cmd_subscribe(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.message.reply_text(
+        SCREEN_SUB,
+        parse_mode=ParseMode.MARKDOWN_V2,
+        reply_markup=_back_menu(),
+    )
+
+
+async def cmd_account(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    try:
+        user_id = update.effective_user.id
+        user = __import__("db").get_or_create_user(user_id)
+        count = user.get("requests_count", 0)
+        subscribed = user.get("is_subscribed", False)
+        until = user.get("subscribed_until", "")
+
+        if subscribed and until:
+            from datetime import datetime, timezone
+            until_dt = datetime.fromisoformat(until.replace("Z", "+00:00"))
+            if until_dt > datetime.now(timezone.utc):
+                until_str = _esc(until_dt.strftime("%d.%m.%Y"))
+                sub_line = f"💳 Подписка активна до {until_str}"
+            else:
+                sub_line = "🔒 Подписка истекла"
+        elif subscribed:
+            sub_line = "💳 Подписка активна"
+        else:
+            remaining = max(0, 3 - count)
+            sub_line = f"🆓 Бесплатных разборов осталось: *{remaining}/3*"
+
+        text = (
+            "👤 *Мой аккаунт*\n\n"
+            f"Запросов использовано: *{_esc(str(count))}*\n"
+            f"{sub_line}\n\n"
+            "_Подписка даёт безлимитные разборы за 149 ₽/мес\\._"
+        )
+        await update.message.reply_text(
+            text,
+            parse_mode=ParseMode.MARKDOWN_V2,
+            reply_markup=_back_menu(),
+        )
+    except Exception as e:
+        logger.error("cmd_account error: %s", e, exc_info=True)
+        await update.message.reply_text(f"Произошла ошибка: {e}")
+
+
 # ─── Сборка приложения ────────────────────────────────────────────────────────
 
 def build_app(token: str):
@@ -476,6 +538,10 @@ def build_app(token: str):
     app = builder.build()
 
     app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(CommandHandler("help", cmd_help))
+    app.add_handler(CommandHandler("examples", cmd_examples))
+    app.add_handler(CommandHandler("subscribe", cmd_subscribe))
+    app.add_handler(CommandHandler("account", cmd_account))
     app.add_handler(CommandHandler("myid", cmd_myid))
     app.add_handler(CommandHandler("activate", cmd_activate))
     app.add_handler(CommandHandler("stats", cmd_stats))
