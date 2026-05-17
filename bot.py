@@ -6,7 +6,7 @@ from telegram.constants import ParseMode
 
 from analyzer import analyze_bad, image_to_base64
 from config import PROXY_URL, ADMIN_ID
-from db import is_allowed, increment_requests, set_subscribed, remaining_free, get_stats
+from db import is_allowed, increment_requests, set_subscribed, remaining_free, get_stats, get_or_create_user
 
 logger = logging.getLogger(__name__)
 
@@ -305,7 +305,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     elif data == "score":
         user_id = query.from_user.id
-        user = __import__("db").get_or_create_user(user_id)
+        user = get_or_create_user(user_id)
         count = user.get("requests_count", 0)
         subscribed = user.get("is_subscribed", False)
         until = user.get("subscribed_until", "")
@@ -532,7 +532,7 @@ async def cmd_subscribe(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 async def cmd_account(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     try:
         user_id = update.effective_user.id
-        user = __import__("db").get_or_create_user(user_id)
+        user = get_or_create_user(user_id)
         count = user.get("requests_count", 0)
         subscribed = user.get("is_subscribed", False)
         until = user.get("subscribed_until", "")

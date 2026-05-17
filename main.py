@@ -1,5 +1,6 @@
 import logging
 import os
+import subprocess
 import time
 
 from config import TELEGRAM_TOKEN
@@ -18,10 +19,19 @@ MAX_RETRY_WAIT = 60  # максимальная пауза между перез
 
 
 def run() -> None:
+    # Логируем git-коммит чтобы видеть в Railway какая версия реально запущена
+    try:
+        commit = subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"], stderr=subprocess.DEVNULL
+        ).decode().strip()
+    except Exception:
+        commit = "unknown"
+    logger.info("=== BAD-ANALYZER-BOT STARTED | commit=%s | PID=%s ===", commit, os.getpid())
+
     retry = 0
     while True:
         try:
-            logger.info("Запуск бота (попытка %d, PID %s)...", retry + 1, os.getpid())
+            logger.info("Запуск polling (попытка %d)...", retry + 1)
             app = build_app(TELEGRAM_TOKEN)
             app.run_polling(
                 drop_pending_updates=True,
