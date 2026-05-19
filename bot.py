@@ -365,8 +365,20 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await query.edit_message_text(SCREEN_SUB, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=_sub_menu())
 
     elif data == "pay":
-        await query.answer()
-        await _send_invoice(query.from_user.id, context)
+        if not YUKASSA_TOKEN:
+            await context.bot.send_message(
+                query.from_user.id,
+                "⚠️ Оплата временно недоступна. Напишите администратору."
+            )
+            return
+        try:
+            await _send_invoice(query.from_user.id, context)
+        except Exception as e:
+            logger.error("send_invoice error: %s", e, exc_info=True)
+            await context.bot.send_message(
+                query.from_user.id,
+                f"⚠️ Не удалось создать платёж: {e}"
+            )
 
     elif data == "score":
         user_id = query.from_user.id
