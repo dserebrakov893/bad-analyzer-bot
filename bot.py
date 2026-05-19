@@ -4,15 +4,17 @@ from telegram import (
     Update, InlineKeyboardButton, InlineKeyboardMarkup,
     SwitchInlineQueryChosenChat,
     InlineQueryResultArticle, InputTextMessageContent,
+    LabeledPrice,
 )
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler,
-    CallbackQueryHandler, InlineQueryHandler, filters, ContextTypes,
+    CallbackQueryHandler, InlineQueryHandler, PreCheckoutQueryHandler,
+    filters, ContextTypes,
 )
 from telegram.constants import ParseMode
 
 from analyzer import analyze_bad, image_to_base64
-from config import PROXY_URL, ADMIN_ID
+from config import PROXY_URL, ADMIN_ID, YUKASSA_TOKEN
 from db import is_allowed, increment_requests, set_subscribed, remaining_free, get_stats, get_or_create_user
 
 logger = logging.getLogger(__name__)
@@ -71,10 +73,9 @@ SCREEN_HOW = (
 SCREEN_SUB = (
     "💳 *Подписка*\n\n"
     "Бесплатно: *3 разбора*\n"
-    "Подписка: *149 ₽/мес*\n\n"
+    "Подписка: *149 ₽/мес* — безлимитные разборы\n\n"
     "Это дешевле одной ненужной банки витаминов\\.\n\n"
-    "👉 [Оплатить подписку](https://t.me/tribute/app?startapp=dKdT)\n\n"
-    "_После оплаты напиши /activate_"
+    "Нажми кнопку ниже — оплата через Telegram, безопасно\\."
 )
 
 DISCLAIMER = (
@@ -84,9 +85,8 @@ DISCLAIMER = (
 
 PAYWALL = (
     "Бесплатные разборы закончились \\(3/3\\) 🔒\n\n"
-    "Подписка *149 ₽/мес* — меньше одной ненужной банки:\n"
-    "👉 [Оплатить подписку](https://t.me/tribute/app?startapp=dKdT)\n\n"
-    "_После оплаты напиши /activate_"
+    "Подписка *149 ₽/мес* — меньше одной ненужной банки\\.\n"
+    "Оплата через Telegram, безопасно\\."
 )
 
 EVIDENCE = {
@@ -319,6 +319,19 @@ def _back_menu() -> InlineKeyboardMarkup:
     ])
 
 
+def _sub_menu() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("💳 Оплатить 149 ₽", callback_data="pay")],
+        [InlineKeyboardButton("← Главное меню", callback_data="main")],
+    ])
+
+
+def _paywall_menu() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("💳 Оплатить подписку 149 ₽", callback_data="pay")],
+    ])
+
+
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     try:
         await update.message.reply_text(
@@ -349,7 +362,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await query.edit_message_text(SCREEN_HOW, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=_back_menu())
 
     elif data == "sub":
-        await query.edit_message_text(SCREEN_SUB, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=_back_menu())
+        await query.edit_message_text(SCREEN_SUB, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=_sub_menu())
+
+    elif data == "pay":
+        await query.answer()
+        await _send_invoice(query.from_user.id, context)
 
     elif data == "score":
         user_id = query.from_user.id
@@ -378,11 +395,15 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 
 async def _check_allowed(update: Update) -> bool:
-    """Проверяет лимит. Если исчерпан — отправляет paywall и возвращает False."""
+    """Проверяет лимит. Если исчерпан — отправляет paywall с кнопкой оплаты."""
     user_id = update.effective_user.id
     allowed = is_allowed(user_id)
     if not allowed:
-        await update.message.reply_text(PAYWALL, parse_mode=ParseMode.MARKDOWN_V2)
+        await update.message.reply_text(
+            PAYWALL,
+            parse_mode=ParseMode.MARKDOWN_V2,
+            reply_markup=_paywall_menu(),
+        )
         return False
     return True
 
@@ -628,7 +649,7 @@ async def cmd_subscribe(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await update.message.reply_text(
             SCREEN_SUB,
             parse_mode=ParseMode.MARKDOWN_V2,
-            reply_markup=_back_menu(),
+            reply_markup=_sub_menu(),
         )
     except Exception as e:
         logger.error("cmd_subscribe error: %s", e, exc_info=True)
@@ -692,10 +713,55 @@ def build_app(token: str):
     app.add_handler(CommandHandler("stats", cmd_stats))
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(InlineQueryHandler(handle_inline_query))
+    app.add_handler(PreCheckoutQueryHandler(pre_checkout_handler))
+    app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment_handler))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_error_handler(global_error_handler)
     return app
+
+
+async def _send_invoice(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Отправляет инвойс для оплаты подписки через ЮКасса."""
+    await context.bot.send_invoice(
+        chat_id=user_id,
+        title="Подписка — БАД Анализатор",
+        description="Безлимитные разборы состава БАД на 30 дней",
+        payload="sub_30d",
+        provider_token=YUKASSA_TOKEN,
+        currency="RUB",
+        prices=[LabeledPrice("Подписка 30 дней", 14900)],
+        start_parameter="subscribe",
+    )
+
+
+async def pre_checkout_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Подтверждаем платёж — обязательно в течение 10 секунд."""
+    query = update.pre_checkout_query
+    # Проверяем payload чтобы принять только наш платёж
+    if query.invoice_payload != "sub_30d":
+        await query.answer(ok=False, error_message="Неизвестный платёж.")
+        return
+    await query.answer(ok=True)
+
+
+async def successful_payment_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Активируем подписку после успешной оплаты."""
+    user_id = update.effective_user.id
+    payment = update.message.successful_payment
+    logger.info(
+        "Успешная оплата от user=%s, charge_id=%s, amount=%s %s",
+        user_id,
+        payment.provider_payment_charge_id,
+        payment.total_amount,
+        payment.currency,
+    )
+    set_subscribed(user_id, days=30)
+    await update.message.reply_text(
+        "✅ *Оплата прошла\\!* Подписка активирована на 30 дней\\.\n\n"
+        "Отправляй любые БАД — анализирую без ограничений 🚀",
+        parse_mode=ParseMode.MARKDOWN_V2,
+    )
 
 
 async def handle_inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

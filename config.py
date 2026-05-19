@@ -9,6 +9,7 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 PROXY_URL = os.getenv("PROXY_URL")  # опционально, например socks5://127.0.0.1:1080
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
+YUKASSA_TOKEN = os.getenv("YUKASSA_TOKEN", "")
 
 # Список admin user_id через запятую: "123,456,789"
 # Для этих пользователей is_allowed всегда True
