@@ -309,7 +309,7 @@ async def _send_result(update: Update, data: dict) -> None:
 
 def _main_menu() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔬 Проверить\nБАД · лекарства · спортпит · напитки", callback_data="check")],
+        [InlineKeyboardButton("🔬 Проверить · БАД · лекарства · спортпит · напитки", callback_data="check")],
         [InlineKeyboardButton("📋 Примеры разборов", callback_data="examples"),
          InlineKeyboardButton("❓ Как это работает", callback_data="how")],
         [InlineKeyboardButton("💳 Подписка", callback_data="sub"),
