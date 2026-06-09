@@ -137,3 +137,60 @@ async def analyze_bad(user_text: str, image_base64: str = None, image_bytes: byt
     except Exception as e:
         logger.error("analyze_bad error: %s", e)
         return {"error": str(e)}
+
+
+SHORT_ADDENDUM = (
+    "\n\nКРАТКО: дай максимально сжатый ответ. "
+    "ingredients — только 3 самых важных ингредиента. "
+    "pros и cons — по 2 пункта максимум. "
+    "cheaper_alternatives — ровно 1 аналог. "
+    "verdict и recommendation — по 1–2 предложения. "
+    "pairs_well_with и avoid_with — по 1 пункту."
+)
+
+
+async def analyze_bad_short(
+    user_text: str, image_base64: str = None, image_bytes: bytes = None
+) -> dict:
+    """Краткий анализ — те же поля JSON, но инструкция быть максимально лаконичным."""
+    content = []
+
+    if image_bytes and not image_base64:
+        image_base64 = image_to_base64(image_bytes)
+
+    if image_base64:
+        raw_bytes = base64.b64decode(image_base64) if not image_bytes else image_bytes
+        media_type = _detect_media_type(raw_bytes)
+        content.append({
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": media_type,
+                "data": image_base64,
+            },
+        })
+
+    content.append({"type": "text", "text": user_text})
+
+    try:
+        response = await _client.messages.create(
+            model=MODEL,
+            max_tokens=2048,
+            system=SYSTEM_PROMPT + SHORT_ADDENDUM,
+            messages=[{"role": "user", "content": content}],
+        )
+        raw = response.content[0].text
+
+        start = raw.find("{")
+        end = raw.rfind("}")
+        if start == -1 or end == -1:
+            raise json.JSONDecodeError("no JSON object found", raw, 0)
+
+        return json.loads(raw[start:end + 1])
+
+    except json.JSONDecodeError:
+        logger.error("short parse_error: %s", response.content[0].text[:2000])
+        return {"error": "parse_error", "raw": response.content[0].text[:500]}
+    except Exception as e:
+        logger.error("analyze_bad_short error: %s", e)
+        return {"error": str(e)}

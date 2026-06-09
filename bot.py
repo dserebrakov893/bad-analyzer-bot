@@ -13,7 +13,7 @@ from telegram.ext import (
 )
 from telegram.constants import ParseMode
 
-from analyzer import analyze_bad, image_to_base64
+from analyzer import analyze_bad, analyze_bad_short, image_to_base64
 from config import PROXY_URL, ADMIN_ID, YUKASSA_TOKEN
 from db import is_allowed, increment_requests, set_subscribed, remaining_free, get_stats, get_or_create_user
 
@@ -270,6 +270,62 @@ def format_result(data: dict) -> list[str]:
     return messages or ["Нет данных для отображения\\."]
 
 
+def format_result_short(data: dict) -> list[str]:
+    """Компактный результат: оценка + вердикт + топ-ингредиенты + 1 аналог. Всё в одном сообщении."""
+    if "error" in data:
+        err = _esc(str(data.get("error", "unknown")))
+        return [f"❌ Ошибка анализа: `{err}`"]
+
+    name = _esc(data.get("product_name", "Неизвестный продукт"))
+    overall = data.get("overall_score", "—")
+    pv = data.get("price_value_ratio", "—")
+    verdict = data.get("verdict", "")
+    rec = data.get("recommendation", "")
+
+    lines = [
+        f"*{name}*",
+        f"Оценка:        {_score_bar(overall)}",
+        f"Цена/польза: {_score_bar(pv)}",
+    ]
+
+    if verdict:
+        lines.append(f"\n💬 _{_esc(verdict)}_")
+
+    ingredients = data.get("ingredients", [])[:3]
+    if ingredients:
+        lines.append("\n*📋 Состав \\(топ\\-3\\):*")
+        for ing in ingredients:
+            ev_key = ing.get("evidence_level", "?")
+            ev_label = _esc(EVIDENCE.get(ev_key, ev_key))
+            ing_name = _esc(ing.get("name", "?"))
+            dose_key = ing.get("dose_assessment", "")
+            dose_str = _esc(DOSE_WARN.get(dose_key, ""))
+            lines.append(f"{ev_label} *{ing_name}*{dose_str}")
+
+    alternatives = data.get("cheaper_alternatives", [])
+    if alternatives:
+        alt = alternatives[0]
+        alt_name = _esc(alt.get("name", "?"))
+        alt_reason = _esc(alt.get("reason", ""))
+        wb = alt.get("wb_price", "")
+        ozon = alt.get("ozon_price", "")
+        price_str = ""
+        if wb or ozon:
+            price_parts = []
+            if wb:
+                price_parts.append(f"WB: {_esc(wb)}")
+            if ozon:
+                price_parts.append(f"Ozon: {_esc(ozon)}")
+            price_str = f"\n   _{'  ·  '.join(price_parts)}_"
+        lines.append(f"\n💰 *Аналог:* {alt_name} — {alt_reason}{price_str}")
+
+    if rec:
+        lines.append(f"\n*🏁* {_esc(rec)}")
+
+    short_disclaimer = "\n\n_⚕️ Не является медицинской рекомендацией\\._"
+    return ["\n".join(lines) + short_disclaimer]
+
+
 # ─── Хэндлеры ────────────────────────────────────────────────────────────────
 
 def _share_button(data: dict) -> InlineKeyboardMarkup:
@@ -336,6 +392,13 @@ def _paywall_menu() -> InlineKeyboardMarkup:
     ])
 
 
+def _format_menu() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("📋 Полный разбор", callback_data="format_full"),
+        InlineKeyboardButton("⚡ Коротко", callback_data="format_short"),
+    ]])
+
+
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     try:
         await update.message.reply_text(
@@ -383,6 +446,21 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 query.from_user.id,
                 f"⚠️ Не удалось создать платёж: {e}"
             )
+
+    elif data in ("format_full", "format_short"):
+        user_text = context.user_data.pop("pending_query", None)
+        image_bytes = context.user_data.pop("pending_photo", None)
+
+        if not user_text:
+            await query.edit_message_text(
+                "⚠️ Запрос не найден — отправь текст или фото заново\\.",
+                parse_mode=ParseMode.MARKDOWN_V2,
+            )
+            return
+
+        await _do_analysis_from_callback(
+            query, context, user_text, image_bytes, short=(data == "format_short")
+        )
 
     elif data == "score":
         user_id = query.from_user.id
@@ -585,24 +663,93 @@ async def _analyze_and_reply(
         increment_requests(user_id, data.get("product_name", user_text[:100]))
 
 
+async def _do_analysis_from_callback(
+    query,  # CallbackQuery
+    context: ContextTypes.DEFAULT_TYPE,
+    user_text: str,
+    image_bytes: bytes = None,
+    short: bool = False,
+) -> None:
+    """Анализирует и отправляет результат из контекста callback-кнопки формата."""
+    user_id = query.from_user.id
+    chat_id = query.message.chat_id
+
+    # Редактируем сообщение с кнопками → заглушка
+    try:
+        await query.edit_message_text("🔬 Анализирую состав... обычно 10–15 секунд")
+    except Exception as e:
+        logger.warning("Не удалось показать заглушку: %s", e)
+
+    await context.bot.send_chat_action(chat_id=chat_id, action="typing")
+
+    kwargs = {"user_text": user_text}
+    if image_bytes:
+        kwargs["image_base64"] = image_to_base64(image_bytes)
+        kwargs["image_bytes"] = image_bytes
+
+    if short:
+        data = await analyze_bad_short(**kwargs)
+        messages = format_result_short(data)
+    else:
+        data = await analyze_bad(**kwargs)
+        messages = format_result(data)
+
+    share_markup = _share_button(data) if "error" not in data else None
+    first_markup = share_markup if len(messages) == 1 else None
+
+    if messages:
+        try:
+            await query.edit_message_text(
+                messages[0],
+                parse_mode=ParseMode.MARKDOWN_V2,
+                reply_markup=first_markup,
+            )
+            remaining = messages[1:]
+        except Exception as e:
+            logger.warning("Не удалось отредактировать заглушку: %s", e)
+            remaining = messages
+
+        for i, msg in enumerate(remaining):
+            is_last = (i == len(remaining) - 1)
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=msg,
+                parse_mode=ParseMode.MARKDOWN_V2,
+                reply_markup=share_markup if is_last else None,
+            )
+
+    if "error" not in data:
+        increment_requests(user_id, data.get("product_name", user_text[:100]))
+
+
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     user_text = update.message.text.strip()
 
     try:
-        # Есть сохранённое фото — значит пользователь отвечает ценой
+        # Есть сохранённое фото — пользователь прислал цену
         image_bytes: bytes = context.user_data.pop("pending_photo", None)
         if image_bytes:
             if not await _check_allowed(update):
                 return
-            user_text_full = f"Проанализируй состав БАД на этикетке.\nЦена упаковки: {user_text} руб."
-            await _analyze_and_reply(update, context, user_text_full, image_bytes=image_bytes)
+            user_text_full = f"Проанализируй состав на этикетке.\nЦена упаковки: {user_text} руб."
+            context.user_data["pending_query"] = user_text_full
+            context.user_data["pending_photo"] = image_bytes
+            await update.message.reply_text(
+                "Фото и цена получены\\. Выбери формат ответа:",
+                parse_mode=ParseMode.MARKDOWN_V2,
+                reply_markup=_format_menu(),
+            )
             return
 
         # Обычный текстовый запрос
         if not await _check_allowed(update):
             return
-        await _analyze_and_reply(update, context, user_text)
+        context.user_data["pending_query"] = user_text
+        await update.message.reply_text(
+            "Выбери формат ответа:",
+            reply_markup=_format_menu(),
+        )
 
     except Exception as e:
         logger.error("handle_text error (user=%s): %s", user_id, e, exc_info=True)
@@ -623,10 +770,13 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         image_bytes = bytes(await tg_file.download_as_bytearray())
 
         context.user_data["pending_photo"] = image_bytes
+        context.user_data["pending_query"] = "Проанализируй состав продукта на этикетке."
 
         await update.message.reply_text(
-            "Фото получил\\! Укажи цену с упаковки в рублях — подберу аналог дешевле 👇",
-            parse_mode="MarkdownV2",
+            "Фото получил\\! Выбери формат ответа — или сначала напиши цену текстом, "
+            "чтобы я подобрал аналог точнее 👇",
+            parse_mode=ParseMode.MARKDOWN_V2,
+            reply_markup=_format_menu(),
         )
     except Exception as e:
         logger.error("handle_photo error (user=%s): %s", user_id, e, exc_info=True)
