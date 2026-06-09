@@ -458,9 +458,16 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             )
             return
 
-        await _do_analysis_from_callback(
-            query, context, user_text, image_bytes, short=(data == "format_short")
-        )
+        try:
+            await _do_analysis_from_callback(
+                query, context, user_text, image_bytes, short=(data == "format_short")
+            )
+        except Exception as e:
+            logger.error("format callback error (data=%s user=%s): %s", data, query.from_user.id, e, exc_info=True)
+            try:
+                await query.message.reply_text(f"Ошибка: {str(e)}")
+            except Exception:
+                pass
 
     elif data == "score":
         user_id = query.from_user.id
