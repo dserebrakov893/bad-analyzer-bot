@@ -683,11 +683,21 @@ async def _do_analysis_from_callback(
     user_id = query.from_user.id
     chat_id = query.message.chat_id
 
-    # Редактируем сообщение с кнопками → заглушка
+    # Удаляем сообщение с кнопками — чтобы повторный тап по второй кнопке не породил второй анализ
     try:
-        await query.edit_message_text("🔬 Анализирую состав... обычно 10–15 секунд")
+        await query.message.delete()
     except Exception as e:
-        logger.warning("Не удалось показать заглушку: %s", e)
+        logger.warning("Не удалось удалить сообщение с кнопками: %s", e)
+
+    # Отправляем новую заглушку и сохраняем её для последующего редактирования
+    placeholder = None
+    try:
+        placeholder = await context.bot.send_message(
+            chat_id=chat_id,
+            text="🔬 Анализирую состав... обычно 10–15 секунд",
+        )
+    except Exception as e:
+        logger.warning("Не удалось отправить заглушку: %s", e)
 
     await context.bot.send_chat_action(chat_id=chat_id, action="typing")
 
@@ -707,15 +717,19 @@ async def _do_analysis_from_callback(
     first_markup = share_markup if len(messages) == 1 else None
 
     if messages:
-        try:
-            await query.edit_message_text(
-                messages[0],
-                parse_mode=ParseMode.MARKDOWN_V2,
-                reply_markup=first_markup,
-            )
-            remaining = messages[1:]
-        except Exception as e:
-            logger.warning("Не удалось отредактировать заглушку: %s", e)
+        # Редактируем заглушку в первое сообщение результата
+        if placeholder:
+            try:
+                await placeholder.edit_text(
+                    messages[0],
+                    parse_mode=ParseMode.MARKDOWN_V2,
+                    reply_markup=first_markup,
+                )
+                remaining = messages[1:]
+            except Exception as e:
+                logger.warning("Не удалось отредактировать заглушку: %s", e)
+                remaining = messages
+        else:
             remaining = messages
 
         for i, msg in enumerate(remaining):
