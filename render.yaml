@@ -1,0 +1,19 @@
+services:
+  - type: worker
+    name: leo-apteka-bot
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main.py
+    envVars:
+      - key: TELEGRAM_TOKEN
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
+      - key: ADMIN_ID
+        sync: false
+      - key: YUKASSA_TOKEN
+        sync: false

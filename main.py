@@ -1,6 +1,9 @@
 import logging
 import os
 import subprocess
+import time
+
+from telegram.error import Conflict
 
 from config import TELEGRAM_TOKEN
 from bot import build_app
@@ -14,8 +17,8 @@ logging.getLogger("telegram").setLevel(logging.WARNING)
 
 logger = logging.getLogger(__name__)
 
-WEBHOOK_HOST = "https://worker-production-be17.up.railway.app"
-LISTEN_PORT  = int(os.environ.get("PORT", 8443))
+MAX_RETRY_WAIT = 60
+CONFLICT_WAIT  = 30
 
 
 def run() -> None:
@@ -25,20 +28,32 @@ def run() -> None:
         ).decode().strip()
     except Exception:
         commit = "unknown"
-    logger.info("=== BAD-ANALYZER-BOT (webhook) | commit=%s | PORT=%s ===", commit, LISTEN_PORT)
+    logger.info("=== BAD-ANALYZER-BOT STARTED | commit=%s | PID=%s ===", commit, os.getpid())
 
-    app = build_app(TELEGRAM_TOKEN)
+    retry = 0
+    while True:
+        try:
+            logger.info("Запуск polling (попытка %d)...", retry + 1)
+            app = build_app(TELEGRAM_TOKEN)
+            app.run_polling(drop_pending_updates=True)
+            logger.warning("run_polling завершился — перезапуск через 5 сек...")
+            time.sleep(5)
+            retry = 0
 
-    webhook_url = f"{WEBHOOK_HOST}/{TELEGRAM_TOKEN}"
-    logger.info("Webhook → %s", webhook_url)
+        except KeyboardInterrupt:
+            logger.info("Получен KeyboardInterrupt — остановка.")
+            break
 
-    app.run_webhook(
-        listen="0.0.0.0",
-        port=LISTEN_PORT,
-        url_path=TELEGRAM_TOKEN,
-        webhook_url=webhook_url,
-        drop_pending_updates=True,
-    )
+        except Conflict:
+            retry += 1
+            logger.warning("Conflict: другой экземпляр бота ещё работает. Ожидание %d сек (попытка %d)...", CONFLICT_WAIT, retry)
+            time.sleep(CONFLICT_WAIT)
+
+        except Exception as e:
+            retry += 1
+            wait = min(MAX_RETRY_WAIT, 2 ** min(retry, 6))
+            logger.error("Бот упал: %s. Перезапуск через %d сек (попытка %d)...", e, wait, retry, exc_info=True)
+            time.sleep(wait)
 
 
 if __name__ == "__main__":
