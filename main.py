@@ -1,9 +1,6 @@
 import logging
 import os
 import subprocess
-import time
-
-from telegram.error import Conflict
 
 from config import TELEGRAM_TOKEN
 from bot import build_app
@@ -17,54 +14,31 @@ logging.getLogger("telegram").setLevel(logging.WARNING)
 
 logger = logging.getLogger(__name__)
 
-MAX_RETRY_WAIT = 60  # максимальная пауза между перезапусками (сек)
-CONFLICT_WAIT = 30   # ждём дольше при Conflict — старый контейнер должен умереть
+WEBHOOK_HOST = "https://worker-production-be17.up.railway.app"
+LISTEN_PORT  = 8443
 
 
 def run() -> None:
-    # Логируем git-коммит чтобы видеть в Railway какая версия реально запущена
     try:
         commit = subprocess.check_output(
             ["git", "rev-parse", "--short", "HEAD"], stderr=subprocess.DEVNULL
         ).decode().strip()
     except Exception:
         commit = "unknown"
-    logger.info("=== BAD-ANALYZER-BOT STARTED | commit=%s | PID=%s ===", commit, os.getpid())
+    logger.info("=== BAD-ANALYZER-BOT STARTED (webhook) | commit=%s | PID=%s ===", commit, os.getpid())
 
-    retry = 0
-    while True:
-        try:
-            logger.info("Запуск polling (попытка %d)...", retry + 1)
-            app = build_app(TELEGRAM_TOKEN)
-            app.run_polling(drop_pending_updates=True)
-            # run_polling вернул управление — нештатная ситуация, перезапускаем
-            logger.warning("run_polling завершился — перезапуск через 5 сек...")
-            time.sleep(5)
-            retry = 0  # сброс счётчика при нормальной работе
+    app = build_app(TELEGRAM_TOKEN)
 
-        except KeyboardInterrupt:
-            logger.info("Получен KeyboardInterrupt — остановка.")
-            break
+    webhook_url = f"{WEBHOOK_HOST}/{TELEGRAM_TOKEN}"
+    logger.info("Webhook URL: %s", webhook_url)
 
-        except Conflict:
-            # Другой экземпляр (старый деплой) ещё не умер — ждём дольше
-            retry += 1
-            logger.warning(
-                "Conflict: другой экземпляр бота ещё работает. "
-                "Ожидание %d сек перед повтором (попытка %d)...",
-                CONFLICT_WAIT, retry,
-            )
-            time.sleep(CONFLICT_WAIT)
-
-        except Exception as e:
-            retry += 1
-            wait = min(MAX_RETRY_WAIT, 2 ** min(retry, 6))  # 2, 4, 8, 16, 32, 60...
-            logger.error(
-                "Бот упал: %s. Перезапуск через %d сек (попытка %d)...",
-                e, wait, retry,
-                exc_info=True,
-            )
-            time.sleep(wait)
+    app.run_webhook(
+        listen="0.0.0.0",
+        port=LISTEN_PORT,
+        url_path=TELEGRAM_TOKEN,
+        webhook_url=webhook_url,
+        drop_pending_updates=True,
+    )
 
 
 if __name__ == "__main__":
