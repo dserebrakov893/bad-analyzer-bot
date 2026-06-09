@@ -15,7 +15,7 @@ logging.getLogger("telegram").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 WEBHOOK_HOST = "https://worker-production-be17.up.railway.app"
-LISTEN_PORT  = 8443
+LISTEN_PORT  = int(os.environ.get("PORT", 8443))
 
 
 def run() -> None:
@@ -25,12 +25,12 @@ def run() -> None:
         ).decode().strip()
     except Exception:
         commit = "unknown"
-    logger.info("=== BAD-ANALYZER-BOT STARTED (webhook) | commit=%s | PID=%s ===", commit, os.getpid())
+    logger.info("=== BAD-ANALYZER-BOT (webhook) | commit=%s | PORT=%s ===", commit, LISTEN_PORT)
 
     app = build_app(TELEGRAM_TOKEN)
 
     webhook_url = f"{WEBHOOK_HOST}/{TELEGRAM_TOKEN}"
-    logger.info("Webhook URL: %s", webhook_url)
+    logger.info("Webhook → %s", webhook_url)
 
     app.run_webhook(
         listen="0.0.0.0",

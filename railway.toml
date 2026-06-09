@@ -4,6 +4,3 @@ builder = "nixpacks"
 [deploy]
 startCommand = "python main.py"
 restartPolicyType = "always"
-
-[[services]]
-internalPort = 8443
