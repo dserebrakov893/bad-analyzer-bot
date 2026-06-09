@@ -678,6 +678,8 @@ async def _do_analysis_from_callback(
     short: bool = False,
 ) -> None:
     """Анализирует и отправляет результат из контекста callback-кнопки формата."""
+    await query.answer()  # сразу снимаем «часики» у кнопки, иначе Telegram даст Timed out
+
     user_id = query.from_user.id
     chat_id = query.message.chat_id
 
