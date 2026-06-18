@@ -346,7 +346,7 @@ def _share_button(data: dict) -> InlineKeyboardMarkup:
                 allow_channel_chats=True,
             ),
         )],
-        [InlineKeyboardButton("💬 Поддержка", url="https://t.me/meine_nika")],
+        [InlineKeyboardButton("💬 Поддержка", callback_data="support")],
     ])
 
 
@@ -371,7 +371,7 @@ def _main_menu() -> InlineKeyboardMarkup:
          InlineKeyboardButton("❓ Как это работает", callback_data="how")],
         [InlineKeyboardButton("💳 Подписка", callback_data="sub"),
          InlineKeyboardButton("📊 Мой счёт", callback_data="score")],
-        [InlineKeyboardButton("💬 Поддержка", url="https://t.me/meine_nika")],
+        [InlineKeyboardButton("💬 Поддержка", callback_data="support")],
     ])
 
 
@@ -420,6 +420,17 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     if data == "main":
         await query.edit_message_text(WELCOME, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=_main_menu())
+
+    elif data == "support":
+        await query.answer()
+        await context.bot.send_message(
+            chat_id=query.from_user.id,
+            text=(
+                "💬 Поддержка\n\n"
+                "Отвечаем с 10:00 до 22:00 по Москве.\n\n"
+                "Написать сюда 👉 @meine_nika"
+            ),
+        )
 
     elif data == "check":
         await query.edit_message_text(SCREEN_CHECK, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=_back_menu())
