@@ -1,4 +1,5 @@
 import logging
+import time
 from datetime import datetime, timedelta, timezone
 from supabase import create_client, Client
 from config import SUPABASE_URL, SUPABASE_KEY, ADMIN_IDS
@@ -7,23 +8,36 @@ logger = logging.getLogger(__name__)
 
 _client: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
+
+def _retry(fn, retries=3, delay=1.5):
+    """Повторяет fn при сетевых ошибках (DNS, connection reset и т.п.)."""
+    for attempt in range(retries):
+        try:
+            return fn()
+        except OSError as e:
+            if attempt < retries - 1:
+                logger.warning("Supabase сетевая ошибка (попытка %d/%d): %s", attempt + 1, retries, e)
+                time.sleep(delay)
+            else:
+                raise
+
 FREE_LIMIT = 3
 
 
 def get_or_create_user(user_id: int) -> dict:
     """Возвращает запись пользователя, создаёт если не существует."""
-    res = (
+    res = _retry(lambda: (
         _client.table("users")
         .select("*")
         .eq("user_id", user_id)
         .limit(1)
         .execute()
-    )
+    ))
     if res.data:
         return res.data[0]
 
     new_user = {"user_id": user_id, "requests_count": 0, "is_subscribed": False}
-    insert = _client.table("users").insert(new_user).execute()
+    insert = _retry(lambda: _client.table("users").insert(new_user).execute())
     logger.info("Новый пользователь создан: %s", user_id)
     return insert.data[0]
 

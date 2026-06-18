@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import json
 import logging
@@ -115,28 +116,36 @@ async def analyze_bad(user_text: str, image_base64: str = None, image_bytes: byt
 
     content.append({"type": "text", "text": user_text})
 
-    try:
-        response = await _client.messages.create(
-            model=MODEL,
-            max_tokens=8096,
-            system=SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": content}],
-        )
-        raw = response.content[0].text
+    for attempt in range(3):
+        try:
+            response = await _client.messages.create(
+                model=MODEL,
+                max_tokens=8096,
+                system=SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": content}],
+            )
+            raw = response.content[0].text
 
-        start = raw.find("{")
-        end = raw.rfind("}")
-        if start == -1 or end == -1:
-            raise json.JSONDecodeError("no JSON object found", raw, 0)
+            start = raw.find("{")
+            end = raw.rfind("}")
+            if start == -1 or end == -1:
+                raise json.JSONDecodeError("no JSON object found", raw, 0)
 
-        return json.loads(raw[start:end + 1])
+            return json.loads(raw[start:end + 1])
 
-    except json.JSONDecodeError:
-        logger.error("parse_error raw response: %s", response.content[0].text[:2000])
-        return {"error": "parse_error", "raw": response.content[0].text[:500]}
-    except Exception as e:
-        logger.error("analyze_bad error: %s", e)
-        return {"error": str(e)}
+        except json.JSONDecodeError:
+            logger.error("parse_error raw response: %s", response.content[0].text[:2000])
+            return {"error": "parse_error", "raw": response.content[0].text[:500]}
+        except OSError as e:
+            if attempt < 2:
+                logger.warning("Anthropic сетевая ошибка (попытка %d/3): %s", attempt + 1, e)
+                await asyncio.sleep(2)
+            else:
+                logger.error("analyze_bad сетевая ошибка после 3 попыток: %s", e)
+                return {"error": str(e)}
+        except Exception as e:
+            logger.error("analyze_bad error: %s", e)
+            return {"error": str(e)}
 
 
 SHORT_ADDENDUM = (
@@ -172,25 +181,33 @@ async def analyze_bad_short(
 
     content.append({"type": "text", "text": user_text})
 
-    try:
-        response = await _client.messages.create(
-            model=MODEL,
-            max_tokens=2048,
-            system=SYSTEM_PROMPT + SHORT_ADDENDUM,
-            messages=[{"role": "user", "content": content}],
-        )
-        raw = response.content[0].text
+    for attempt in range(3):
+        try:
+            response = await _client.messages.create(
+                model=MODEL,
+                max_tokens=2048,
+                system=SYSTEM_PROMPT + SHORT_ADDENDUM,
+                messages=[{"role": "user", "content": content}],
+            )
+            raw = response.content[0].text
 
-        start = raw.find("{")
-        end = raw.rfind("}")
-        if start == -1 or end == -1:
-            raise json.JSONDecodeError("no JSON object found", raw, 0)
+            start = raw.find("{")
+            end = raw.rfind("}")
+            if start == -1 or end == -1:
+                raise json.JSONDecodeError("no JSON object found", raw, 0)
 
-        return json.loads(raw[start:end + 1])
+            return json.loads(raw[start:end + 1])
 
-    except json.JSONDecodeError:
-        logger.error("short parse_error: %s", response.content[0].text[:2000])
-        return {"error": "parse_error", "raw": response.content[0].text[:500]}
-    except Exception as e:
-        logger.error("analyze_bad_short error: %s", e)
-        return {"error": str(e)}
+        except json.JSONDecodeError:
+            logger.error("short parse_error: %s", response.content[0].text[:2000])
+            return {"error": "parse_error", "raw": response.content[0].text[:500]}
+        except OSError as e:
+            if attempt < 2:
+                logger.warning("Anthropic сетевая ошибка short (попытка %d/3): %s", attempt + 1, e)
+                await asyncio.sleep(2)
+            else:
+                logger.error("analyze_bad_short сетевая ошибка после 3 попыток: %s", e)
+                return {"error": str(e)}
+        except Exception as e:
+            logger.error("analyze_bad_short error: %s", e)
+            return {"error": str(e)}
