@@ -335,8 +335,8 @@ def _share_button(data: dict) -> InlineKeyboardMarkup:
     verdict = (data.get("verdict", ""))[:120]
     # Кодируем данные в query — max 256 символов
     query = f"share|{product}|{score}|{verdict}"[:256]
-    return InlineKeyboardMarkup([[
-        InlineKeyboardButton(
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(
             "📤 Поделиться результатом",
             switch_inline_query_chosen_chat=SwitchInlineQueryChosenChat(
                 query=query,
@@ -345,8 +345,9 @@ def _share_button(data: dict) -> InlineKeyboardMarkup:
                 allow_group_chats=True,
                 allow_channel_chats=True,
             ),
-        )
-    ]])
+        )],
+        [InlineKeyboardButton("💬 Поддержка", callback_data="support")],
+    ])
 
 
 async def _send_result(update: Update, data: dict) -> None:
@@ -370,6 +371,7 @@ def _main_menu() -> InlineKeyboardMarkup:
          InlineKeyboardButton("❓ Как это работает", callback_data="how")],
         [InlineKeyboardButton("💳 Подписка", callback_data="sub"),
          InlineKeyboardButton("📊 Мой счёт", callback_data="score")],
+        [InlineKeyboardButton("💬 Поддержка", callback_data="support")],
     ])
 
 
@@ -418,6 +420,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     if data == "main":
         await query.edit_message_text(WELCOME, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=_main_menu())
+
+    elif data == "support":
+        await query.answer("По любым вопросам пиши: @meine_nika", show_alert=True)
 
     elif data == "check":
         await query.edit_message_text(SCREEN_CHECK, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=_back_menu())
@@ -613,7 +618,7 @@ async def _analyze_and_reply(
     try:
         # 1. Заглушка + typing
         await update.message.chat.send_action("typing")
-        placeholder = await update.message.reply_text("🔬 Анализирую состав... обычно 10–15 секунд")
+        placeholder = await update.message.reply_text("🔬 Анализирую... не более 2 минут")
     except Exception as e:
         logger.warning("Не удалось отправить placeholder: %s", e)
 
@@ -694,7 +699,7 @@ async def _do_analysis_from_callback(
     try:
         placeholder = await context.bot.send_message(
             chat_id=chat_id,
-            text="🔬 Анализирую состав... обычно 10–15 секунд",
+            text="🔬 Анализирую... не более 2 минут",
         )
     except Exception as e:
         logger.warning("Не удалось отправить заглушку: %s", e)
@@ -972,6 +977,8 @@ async def handle_inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE
         + (f"{verdict}\n\n" if verdict else "\n")
         + "Проверь свои БАД бесплатно 👆"
     )
+    if len(share_text) > 200:
+        share_text = share_text[:200] + "..."
 
     result = InlineQueryResultArticle(
         id="share_result",
