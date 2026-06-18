@@ -7,6 +7,7 @@ from telegram.error import Conflict
 
 from config import TELEGRAM_TOKEN
 from bot import build_app
+from db import init_db
 
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -29,6 +30,8 @@ def run() -> None:
     except Exception:
         commit = "unknown"
     logger.info("=== BAD-ANALYZER-BOT STARTED | commit=%s | PID=%s ===", commit, os.getpid())
+
+    init_db()
 
     retry = 0
     while True:

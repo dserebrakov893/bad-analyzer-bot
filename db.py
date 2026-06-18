@@ -1,50 +1,79 @@
 import logging
-import time
+import os
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
-from supabase import create_client, Client
-from config import SUPABASE_URL, SUPABASE_KEY, ADMIN_IDS
+
+import psycopg2
+import psycopg2.extras
+from psycopg2.pool import SimpleConnectionPool
+
+from config import ADMIN_IDS
 
 logger = logging.getLogger(__name__)
 
-_client: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-
-
-def _retry(fn, retries=3, delay=1.5):
-    """Повторяет fn при сетевых ошибках (DNS, connection reset и т.п.)."""
-    for attempt in range(retries):
-        try:
-            return fn()
-        except OSError as e:
-            if attempt < retries - 1:
-                logger.warning("Supabase сетевая ошибка (попытка %d/%d): %s", attempt + 1, retries, e)
-                time.sleep(delay)
-            else:
-                raise
-
 FREE_LIMIT = 3
+
+_pool: SimpleConnectionPool = None
+
+
+def _get_pool() -> SimpleConnectionPool:
+    global _pool
+    if _pool is None:
+        _pool = SimpleConnectionPool(1, 5, os.getenv("DATABASE_URL"))
+    return _pool
+
+
+@contextmanager
+def _db():
+    pool = _get_pool()
+    conn = pool.getconn()
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        pool.putconn(conn)
+
+
+def init_db() -> None:
+    """Создаёт таблицы если не существуют."""
+    with _db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    user_id          BIGINT PRIMARY KEY,
+                    requests_count   INTEGER      NOT NULL DEFAULT 0,
+                    is_subscribed    BOOLEAN      NOT NULL DEFAULT FALSE,
+                    subscribed_until TIMESTAMPTZ,
+                    created_at       TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS requests (
+                    id           SERIAL PRIMARY KEY,
+                    user_id      BIGINT       NOT NULL,
+                    product_name TEXT,
+                    created_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+                )
+            """)
+    logger.info("БД инициализирована")
 
 
 def get_or_create_user(user_id: int) -> dict:
-    """Возвращает запись пользователя, создаёт если не существует."""
-    res = _retry(lambda: (
-        _client.table("users")
-        .select("*")
-        .eq("user_id", user_id)
-        .limit(1)
-        .execute()
-    ))
-    if res.data:
-        return res.data[0]
-
-    new_user = {"user_id": user_id, "requests_count": 0, "is_subscribed": False}
-    insert = _retry(lambda: _client.table("users").insert(new_user).execute())
-    logger.info("Новый пользователь создан: %s", user_id)
-    return insert.data[0]
+    with _db() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                INSERT INTO users (user_id, requests_count, is_subscribed)
+                VALUES (%s, 0, FALSE)
+                ON CONFLICT (user_id) DO NOTHING
+            """, (user_id,))
+            cur.execute("SELECT * FROM users WHERE user_id = %s", (user_id,))
+            return dict(cur.fetchone())
 
 
 def is_allowed(user_id: int) -> bool:
-    """True если пользователь подписан или не исчерпал лимит бесплатных запросов."""
-    # Администраторы всегда имеют доступ
     if user_id in ADMIN_IDS:
         return True
 
@@ -54,12 +83,16 @@ def is_allowed(user_id: int) -> bool:
     if user.get("is_subscribed"):
         until = user.get("subscribed_until")
         if until:
-            until_dt = datetime.fromisoformat(until.replace("Z", "+00:00"))
-            if until_dt < datetime.now(timezone.utc):
-                _client.table("users").update({
-                    "is_subscribed": False,
-                    "subscribed_until": None,
-                }).eq("user_id", user_id).execute()
+            if until.tzinfo is None:
+                until = until.replace(tzinfo=timezone.utc)
+            if until < datetime.now(timezone.utc):
+                with _db() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute("""
+                            UPDATE users
+                            SET is_subscribed = FALSE, subscribed_until = NULL
+                            WHERE user_id = %s
+                        """, (user_id,))
                 logger.info("Подписка истекла у пользователя %s", user_id)
             else:
                 return True
@@ -68,77 +101,71 @@ def is_allowed(user_id: int) -> bool:
 
 
 def increment_requests(user_id: int, product_name: str) -> int:
-    """Увеличивает счётчик запросов и логирует в таблицу requests. Возвращает новый счётчик."""
-    user = get_or_create_user(user_id)
-    new_count = user.get("requests_count", 0) + 1
-
-    _client.table("users").update({"requests_count": new_count}).eq("user_id", user_id).execute()
-
-    _client.table("requests").insert({
-        "user_id": user_id,
-        "product_name": product_name[:500],  # обрезаем на случай длинного текста
-    }).execute()
-
+    with _db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE users
+                SET requests_count = requests_count + 1
+                WHERE user_id = %s
+                RETURNING requests_count
+            """, (user_id,))
+            new_count = cur.fetchone()[0]
+            cur.execute(
+                "INSERT INTO requests (user_id, product_name) VALUES (%s, %s)",
+                (user_id, product_name[:500]),
+            )
     logger.info("Запрос #%s от пользователя %s: %s", new_count, user_id, product_name[:80])
     return new_count
 
 
 def set_subscribed(user_id: int, days: int) -> None:
-    """Активирует подписку на указанное количество дней."""
-    get_or_create_user(user_id)  # гарантируем существование записи
-
+    get_or_create_user(user_id)
     until = datetime.now(timezone.utc) + timedelta(days=days)
-    _client.table("users").update({
-        "is_subscribed": True,
-        "subscribed_until": until.isoformat(),
-    }).eq("user_id", user_id).execute()
-
+    with _db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE users
+                SET is_subscribed = TRUE, subscribed_until = %s
+                WHERE user_id = %s
+            """, (until, user_id))
     logger.info("Подписка активирована для %s до %s", user_id, until.strftime("%Y-%m-%d"))
 
 
 def remaining_free(user_id: int) -> int:
-    """Возвращает количество оставшихся бесплатных запросов."""
     user = get_or_create_user(user_id)
-    used = user.get("requests_count", 0)
-    return max(0, FREE_LIMIT - used)
+    return max(0, FREE_LIMIT - user.get("requests_count", 0))
 
 
 def get_stats() -> dict:
-    """Возвращает статистику для админа."""
-    from datetime import datetime, timezone, timedelta
-
     now = datetime.now(timezone.utc)
-    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
-    week_ago = (now - timedelta(days=7)).isoformat()
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    week_ago = now - timedelta(days=7)
 
-    total_users = len(
-        _client.table("users").select("user_id").execute().data
-    )
-    new_week = len(
-        _client.table("users").select("user_id")
-        .gte("created_at", week_ago).execute().data
-    )
-    subscribers = len(
-        _client.table("users").select("user_id")
-        .eq("is_subscribed", True).execute().data
-    )
-    requests_today = len(
-        _client.table("requests").select("id")
-        .gte("created_at", today_start).execute().data
-    )
-    requests_week = len(
-        _client.table("requests").select("id")
-        .gte("created_at", week_ago).execute().data
-    )
+    with _db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM users")
+            total_users = cur.fetchone()[0]
 
-    # Топ-5 продуктов
-    all_requests = _client.table("requests").select("product_name").execute().data
-    counter: dict[str, int] = {}
-    for row in all_requests:
-        name = (row.get("product_name") or "—").strip()
-        if name:
-            counter[name] = counter.get(name, 0) + 1
-    top5 = sorted(counter.items(), key=lambda x: x[1], reverse=True)[:5]
+            cur.execute("SELECT COUNT(*) FROM users WHERE created_at >= %s", (week_ago,))
+            new_week = cur.fetchone()[0]
+
+            cur.execute("SELECT COUNT(*) FROM users WHERE is_subscribed = TRUE")
+            subscribers = cur.fetchone()[0]
+
+            cur.execute("SELECT COUNT(*) FROM requests WHERE created_at >= %s", (today_start,))
+            requests_today = cur.fetchone()[0]
+
+            cur.execute("SELECT COUNT(*) FROM requests WHERE created_at >= %s", (week_ago,))
+            requests_week = cur.fetchone()[0]
+
+            cur.execute("""
+                SELECT product_name, COUNT(*) AS cnt
+                FROM requests
+                GROUP BY product_name
+                ORDER BY cnt DESC
+                LIMIT 5
+            """)
+            top5 = [(row[0], row[1]) for row in cur.fetchall()]
 
     return {
         "total_users": total_users,
