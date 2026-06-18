@@ -44,18 +44,19 @@ def init_db() -> None:
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS users (
                     user_id          BIGINT PRIMARY KEY,
-                    requests_count   INTEGER      NOT NULL DEFAULT 0,
-                    is_subscribed    BOOLEAN      NOT NULL DEFAULT FALSE,
-                    subscribed_until TIMESTAMPTZ,
-                    created_at       TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+                    requests_count   INTEGER   DEFAULT 0,
+                    is_subscribed    BOOLEAN   DEFAULT FALSE,
+                    subscribed_until TIMESTAMP,
+                    created_at       TIMESTAMP DEFAULT NOW()
                 )
             """)
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS requests (
-                    id           SERIAL PRIMARY KEY,
-                    user_id      BIGINT       NOT NULL,
-                    product_name TEXT,
-                    created_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+                    id            SERIAL PRIMARY KEY,
+                    user_id       BIGINT,
+                    product_name  TEXT,
+                    overall_score INTEGER,
+                    created_at    TIMESTAMP DEFAULT NOW()
                 )
             """)
     logger.info("БД инициализирована")
