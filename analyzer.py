@@ -3,6 +3,7 @@ import base64
 import json
 import logging
 import re
+import traceback
 import anthropic
 from config import ANTHROPIC_API_KEY
 
@@ -141,10 +142,10 @@ async def analyze_bad(user_text: str, image_base64: str = None, image_bytes: byt
                 logger.warning("Anthropic сетевая ошибка (попытка %d/3): %s", attempt + 1, e)
                 await asyncio.sleep(2)
             else:
-                logger.error("analyze_bad сетевая ошибка после 3 попыток: %s", e)
+                logger.error("analyze_bad сетевая ошибка после 3 попыток: %s\n%s", e, traceback.format_exc())
                 return {"error": str(e)}
         except Exception as e:
-            logger.error("analyze_bad error: %s", e)
+            logger.error("analyze_bad error: %s\n%s", e, traceback.format_exc())
             return {"error": str(e)}
 
 
